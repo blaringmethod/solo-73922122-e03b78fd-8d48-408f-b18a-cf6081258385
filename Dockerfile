@@ -6,7 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY sample_survey.csv ./sample_survey.csv
+COPY sample_survey.csv sample_survey_append.csv ./
 
 ENV DB_PATH=/data/app.db
 EXPOSE 8000

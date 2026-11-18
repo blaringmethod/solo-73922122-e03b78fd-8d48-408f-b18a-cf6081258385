@@ -2,8 +2,13 @@
 
 审查模型（不依赖真实检出数作为约束）：
 - 每个格一个未知整数 x_i，仅受 0 <= x_i <= 人数_i 界限约束；
-- 每条历次公开记录：所选交集格之和 == 公开总数；
-- 候选发布：所选交集格之和 == 候选总数。
+- 每条历次公开记录：其发布当时涵盖格（cell_keys 快照）之和 == 公开总数；
+- 候选发布：当前选择交集格之和 == 候选总数。
+
+关键口径：晚到追加的新格即使落入旧记录勾选的分区/年龄组范围，也不在
+旧记录的 cell_keys 快照内，因此不会被计入旧总数约束——已公开汇总只代表
+发布当时实际涵盖的格。候选发布与历史记录联合审查时，约束作用在当前完整
+格集合（旧格 + 追加格）之上，对所有原检出数 1~4 的格统一判定。
 
 判定：对每个"原检出数为 1~4"的格，在上述约束下必须
 - 仍存在 x_i == 0 的可行整数解，且
@@ -27,6 +32,18 @@ def _indices(cells: list[dict], selection: dict) -> list[int]:
         i for i, c in enumerate(cells)
         if c["district"] in ds and c["age_group"] in ags
     ]
+
+
+def _indices_for_publication(cells: list[dict], pub: dict) -> list[int]:
+    """按发布快照取格索引；旧版无快照记录回退为选择交集（迁移后不会发生）。"""
+    keys = pub.get("cell_keys")
+    if keys:
+        key_set = set(keys)
+        return [
+            i for i, c in enumerate(cells)
+            if (c["district"], c["age_group"]) in key_set
+        ]
+    return _indices(cells, pub)
 
 
 def _feasible_range(ctx: Context, constraints, x) -> tuple[int | None, int | None]:
@@ -60,9 +77,13 @@ def evaluate(cells: list[dict], publications: list[dict], candidate: dict) -> di
     for i, c in enumerate(cells):
         constraints.append(xs[i] >= 0)
         constraints.append(xs[i] <= int(c["population"]))
-    for pub in list(publications) + [candidate]:
-        idx = _indices(cells, pub)
+    for pub in publications:
+        idx = _indices_for_publication(cells, pub)
         constraints.append(Sum([xs[i] for i in idx]) == int(pub["total"]))
+    # 候选发布按当前完整格集合的选择交集取格。
+    constraints.append(
+        Sum([xs[i] for i in _indices(cells, candidate)]) == int(candidate["total"])
+    )
 
     base = Solver(ctx=ctx)
     base.add(constraints)

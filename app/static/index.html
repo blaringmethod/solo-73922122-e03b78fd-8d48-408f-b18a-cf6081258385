@@ -41,13 +41,23 @@
     <div id="importMsg" class="msg"></div>
   </section>
 
+  <section id="appendSec" class="hidden">
+    <h2>2. 晚到格值 CSV 追加</h2>
+    <p class="hint">仅接纳当前尚不存在的（分区, 年龄组）组合；<b>旧格不可修改</b>，命中已存在组合或追加后超过 16 格将整批拒绝，失败不留半批数据。已公开汇总只代表发布当时涵盖的格，新格不会被计入任何旧总数。</p>
+    <input type="file" id="appendFile" accept=".csv">
+    <button onclick="doAppend()">追加 CSV</button>
+    <button class="secondary" onclick="appendSample()">追加示例晚到数据（城南 2 格）</button>
+    <div id="appendMsg" class="msg"></div>
+  </section>
+
   <section id="gridSec" class="hidden">
-    <h2>2. 原始数据（仅内部可见，公开页不含格内检出数）</h2>
+    <h2>3. 原始数据（仅内部可见，公开页不含格内检出数）</h2>
+    <p class="hint" id="gridCount"></p>
     <div id="grid"></div>
   </section>
 
   <section id="selSec" class="hidden">
-    <h2>3. 选择发布范围并预览 / 发布</h2>
+    <h2>4. 选择发布范围并预览 / 发布</h2>
     <div class="checks" id="dChecks"></div>
     <div class="checks" id="aChecks"></div>
     <div style="margin-top:10px">
@@ -58,7 +68,7 @@
   </section>
 
   <section id="pubSec" class="hidden">
-    <h2>4. 已公开记录（不可撤销）</h2>
+    <h2>5. 已公开记录（不可撤销）</h2>
     <div id="pubs"></div>
   </section>
 </main>
@@ -100,13 +110,15 @@ async function load(){
 function render(){
   const imported = state.imported;
   document.getElementById('importSec').classList.toggle('hidden', imported);
-  for(const id of ['gridSec','selSec','pubSec'])
+  for(const id of ['appendSec','gridSec','selSec','pubSec'])
     document.getElementById(id).classList.toggle('hidden', !imported);
   if(!imported) return;
 
-  let h = '<table><tr><th>分区</th><th>年龄组</th><th>人数</th><th>检出数</th></tr>';
+  document.getElementById('gridCount').textContent =
+    `当前共 ${state.cells.length} / ${state.max_cells || 16} 格；批次 0 = 首次导入，批次 ≥1 = 晚到追加。`;
+  let h = '<table><tr><th>分区</th><th>年龄组</th><th>人数</th><th>检出数</th><th>批次</th></tr>';
   for(const c of state.cells)
-    h += `<tr><td>${esc(c.district)}</td><td>${esc(c.age_group)}</td><td>${c.population}</td><td>${c.detected}</td></tr>`;
+    h += `<tr><td>${esc(c.district)}</td><td>${esc(c.age_group)}</td><td>${c.population}</td><td>${c.detected}</td><td>${c.batch}</td></tr>`;
   document.getElementById('grid').innerHTML = h + '</table>';
 
   document.getElementById('dChecks').innerHTML = '<b>分区：</b>'
@@ -116,9 +128,9 @@ function render(){
 
   const pubs = state.publications;
   document.getElementById('pubs').innerHTML = pubs.length
-    ? '<table><tr><th>#</th><th>分区</th><th>年龄组</th><th>检出总数</th><th>发布时间 (UTC)</th></tr>'
-      + pubs.map(p => `<tr><td>${p.id}</td><td>${esc(p.districts.join('、'))}</td><td>${esc(p.age_groups.join('、'))}</td><td>${p.total}</td><td>${esc(p.created_at)}</td></tr>`).join('')
-      + '</table>'
+    ? '<table><tr><th>#</th><th>分区</th><th>年龄组</th><th>涵盖格数</th><th>检出总数</th><th>发布时间 (UTC)</th></tr>'
+      + pubs.map(p => `<tr><td>${p.id}</td><td>${esc(p.districts.join('、'))}</td><td>${esc(p.age_groups.join('、'))}</td><td>${(p.cell_keys||[]).length}</td><td>${p.total}</td><td>${esc(p.created_at)}</td></tr>`).join('')
+      + '</table><p class="hint">每条记录的总数仅对应发布当时涵盖的格（按发布快照冻结），晚到追加格不会改写旧记录。</p>'
     : '<p class="hint">暂无公开记录</p>';
 }
 function selection(){
@@ -150,6 +162,31 @@ async function importSample(){
     const r = await api('/api/import', {method: 'POST', body: fd});
     el.className = 'msg ok';
     el.textContent = `已导入示例数据 ${r.imported} 格，此后不可更换。`;
+    await load();
+  }catch(e){ showErr(el, e); }
+}
+async function doAppend(){
+  const el = document.getElementById('appendMsg');
+  const f = document.getElementById('appendFile').files[0];
+  if(!f){ el.className = 'msg err'; el.textContent = '请选择晚到格值 CSV 文件'; return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  try{
+    const r = await api('/api/append', {method: 'POST', body: fd});
+    el.className = 'msg ok';
+    el.textContent = `已追加 ${r.appended} 格（批次 ${r.batch}），当前共 ${r.total_cells} / ${state.max_cells || 16} 格。旧格与已公开记录均未修改。`;
+    await load();
+  }catch(e){ showErr(el, e); }
+}
+async function appendSample(){
+  const el = document.getElementById('appendMsg');
+  try{
+    const t = await (await fetch('/sample_survey_append.csv')).text();
+    const fd = new FormData();
+    fd.append('file', new Blob([t], {type: 'text/csv'}), 'sample_survey_append.csv');
+    const r = await api('/api/append', {method: 'POST', body: fd});
+    el.className = 'msg ok';
+    el.textContent = `已追加示例晚到数据 ${r.appended} 格（批次 ${r.batch}），当前共 ${r.total_cells} / ${state.max_cells || 16} 格。`;
     await load();
   }catch(e){ showErr(el, e); }
 }
